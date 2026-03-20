@@ -100,3 +100,39 @@ npm run dev
 - Chat history is persisted in MongoDB.
 - Read receipts are derived from Message.readBy.
 - Message timestamps are shown in chat bubbles.
+
+## Docker (Full App)
+
+Docker files added:
+- client/Dockerfile
+- server/Dockerfile
+- docker-compose.yml
+
+Run with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+App URLs:
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:5000/api
+
+Stop containers:
+
+```bash
+docker compose down
+```
+
+## GitHub Actions (Basic CI/CD)
+
+Workflow file location:
+- .github/workflows/ci.yml
+
+This file is where you write your CI code in a simple way.
+Current workflow does:
+- Auto run on push to main and pull requests to main
+- Install and build frontend
+- Install backend dependencies and run a basic syntax check
+
+If you want to add deploy later, edit the same file and uncomment the optional deploy job.

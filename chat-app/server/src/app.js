@@ -17,6 +17,10 @@ app.use(
 app.use(express.json());
 app.use(morgan("dev"));
 
+app.get("/", (_req, res) => {
+  res.send("Welcome to the Chat App API");
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });

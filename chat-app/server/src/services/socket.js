@@ -5,6 +5,10 @@ import User from "../models/User.js";
 import Message from "../models/Message.js";
 
 let io;
+const allowedOrigins = (process.env.CLIENT_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 const userSocketMap = new Map();
 
 const ensureUserSocketSet = (userId) => {
@@ -54,7 +58,13 @@ const authenticateSocket = async (socket, next) => {
 export const initSocket = (httpServer) => {
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.CLIENT_ORIGIN,
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error("Not allowed by CORS"));
+      },
       credentials: true,
     },
   });

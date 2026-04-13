@@ -48,6 +48,14 @@ export const AuthProvider = ({ children }) => {
     return data;
   };
 
+  const loginWithGoogle = async (idToken) => {
+    const { data } = await api.post("/auth/google", { idToken });
+    localStorage.setItem("chat_token", data.token);
+    setToken(data.token);
+    setUser(data.user);
+    return data;
+  };
+
   const logout = () => {
     localStorage.removeItem("chat_token");
     setToken(null);
@@ -55,7 +63,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const value = useMemo(
-    () => ({ token, user, loading, login, register, logout }),
+    () => ({ token, user, loading, login, register, loginWithGoogle, logout }),
     [token, user, loading]
   );
 

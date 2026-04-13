@@ -4,7 +4,7 @@ Build a full-stack real-time chat application using the MERN stack with the foll
 
 Frontend:
 - Use React.js with a clean and responsive UI
-- Implement user authentication (login/register)
+- Implement user authentication (Google OAuth + optional login/register)
 - Show online/offline users
 - Display chat messages in real-time
 - Add typing indicator feature
@@ -31,6 +31,10 @@ Additional Features:
 - Maintain chat history
 - Handle errors and edge cases
 - Use environment variables for configuration
+
+Authentication Policy:
+- Google OAuth is enabled for verified identities
+- Local signup can be disabled with `ALLOW_LOCAL_SIGNUP=false` to prevent fake accounts
 
 Project Structure:
 - client (React frontend)
@@ -62,33 +66,42 @@ cd server && copy .env.example .env
 cd ../client && copy .env.example .env
 ```
 
-2. Install dependencies:
+2. Configure Google OAuth:
+
+- Create a Web OAuth client in Google Cloud Console
+- Add `http://localhost:5173` to authorized JavaScript origins
+- Set the same client ID in:
+  - `server/.env` -> `GOOGLE_CLIENT_ID`
+  - `client/.env` -> `VITE_GOOGLE_CLIENT_ID`
+
+3. Install dependencies:
 
 ```bash
 cd server && npm install
 cd ../client && npm install
 ```
 
-3. Start backend:
+4. Start backend:
 
 ```bash
 cd server
 npm run dev
 ```
 
-4. Start frontend:
+5. Start frontend:
 
 ```bash
 cd client
 npm run dev
 ```
 
-5. Open the app:
+6. Open the app:
 - http://localhost:5173
 
 ## Backend API (Summary)
 - POST /api/auth/register
 - POST /api/auth/login
+- POST /api/auth/google
 - GET /api/auth/me
 - GET /api/users
 - GET /api/messages/:userId
@@ -124,15 +137,54 @@ Stop containers:
 docker compose down
 ```
 
-## GitHub Actions (Basic CI/CD)
+## GitHub Actions (Automated CI/CD)
 
-Workflow file location:
-- .github/workflows/ci.yml
+Workflow files:
+- `.github/workflows/ci.yml`
+- `.github/workflows/docker-publish.yml`
+- `.github/workflows/deploy.yml`
 
-This file is where you write your CI code in a simple way.
-Current workflow does:
-- Auto run on push to main and pull requests to main
-- Install and build frontend
-- Install backend dependencies and run a basic syntax check
+### 1) CI (`ci.yml`)
+Runs on pull requests and pushes to `main`/`develop`.
 
-If you want to add deploy later, edit the same file and uncomment the optional deploy job.
+Checks included:
+- Frontend install + production build (`npm ci`, `npm run build`)
+- Backend install + syntax validation of all server source files
+- Docker Compose validation + container build for all services
+
+### 2) Docker Image Publish (`docker-publish.yml`)
+Runs on pushes to `main`, version tags (`v*`), or manual trigger.
+
+What it does:
+- Builds `client` and `server` images with Buildx cache
+- Tags images (`branch`, `tag`, `sha`, and `latest` for default branch)
+- Pushes images to GitHub Container Registry (`ghcr.io`)
+
+Published image names:
+- `ghcr.io/<owner>/chatsphere-client`
+- `ghcr.io/<owner>/chatsphere-server`
+
+### 3) Deploy (`deploy.yml`)
+Manual trigger (`workflow_dispatch`) for controlled production deploy.
+
+What it does:
+- SSH into deployment server
+- Log in to GHCR
+- Pull latest images using Docker Compose
+- Restart services with zero-manual shell steps in GitHub UI
+
+### Required GitHub Secrets
+- `DEPLOY_HOST`
+- `DEPLOY_USER`
+- `DEPLOY_SSH_KEY`
+- `DEPLOY_PORT` (optional, defaults to `22`)
+- `GHCR_USERNAME`
+- `GHCR_TOKEN` (must have package read permissions)
+
+### Required GitHub Variables
+- `DEPLOY_APP_DIR` (example: `/opt/chat-app`)
+- `VITE_API_BASE_URL`
+- `VITE_SOCKET_URL`
+- `VITE_GOOGLE_CLIENT_ID`
+
+This setup provides end-to-end CI/CD automation on top of existing Docker containerization, significantly reducing manual deployment effort while improving release consistency and reliability.

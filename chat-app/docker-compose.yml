@@ -25,6 +25,8 @@ services:
       MONGODB_URI: mongodb://mongo:27017/realtime_chat
       JWT_SECRET: replace_with_long_secret
       CLIENT_ORIGIN: http://localhost:5173
+      GOOGLE_CLIENT_ID: your_google_oauth_client_id.apps.googleusercontent.com
+      ALLOW_LOCAL_SIGNUP: "false"
 
   client:
     build:
@@ -33,6 +35,8 @@ services:
       args:
         VITE_API_BASE_URL: http://localhost:5000/api
         VITE_SOCKET_URL: http://localhost:5000
+        VITE_GOOGLE_CLIENT_ID: your_google_oauth_client_id.apps.googleusercontent.com
+        VITE_ALLOW_LOCAL_SIGNUP: "false"
     container_name: chatsphere-client
     restart: unless-stopped
     depends_on:

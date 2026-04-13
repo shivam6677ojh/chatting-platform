@@ -6,40 +6,185 @@ import { useAuth } from "./AuthContext";
 
 const ChatContext = createContext(null);
 
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ],
+};
+
 export const ChatProvider = ({ children }) => {
-  const { token, user } = useAuth();
+  const { token, user, loading: authLoading, logout } = useAuth();
   const [users, setUsers] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
+  const [selectedGroup, setSelectedGroup] = useState(null);
   const [messages, setMessages] = useState([]);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [typingFrom, setTypingFrom] = useState(null);
+  const [groupTypingBy, setGroupTypingBy] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [callState, setCallState] = useState({
+    status: "idle",
+    type: null,
+    withUserId: null,
+    withName: null,
+  });
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+
   const socketRef = useRef(null);
   const selectedUserRef = useRef(null);
+  const selectedGroupRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const callPeerUserIdRef = useRef(null);
+
+  const appendMessageIfMissing = (message) => {
+    if (!message?._id) {
+      return;
+    }
+
+    setMessages((prev) => {
+      if (prev.some((item) => item._id === message._id)) {
+        return prev;
+      }
+      return [...prev, message];
+    });
+  };
 
   useEffect(() => {
     selectedUserRef.current = selectedUser;
   }, [selectedUser]);
 
   useEffect(() => {
-    if (!token) {
-      setUsers([]);
-      setSelectedUser(null);
-      setMessages([]);
-      setOnlineUsers([]);
+    selectedGroupRef.current = selectedGroup;
+  }, [selectedGroup]);
+
+  const cleanupPeer = (shouldStopStreams = true) => {
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.onconnectionstatechange = null;
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+
+    if (shouldStopStreams) {
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+      }
+
+      if (remoteStream) {
+        remoteStream.getTracks().forEach((track) => track.stop());
+      }
+
+      setLocalStream(null);
+      setRemoteStream(null);
+    }
+
+    callPeerUserIdRef.current = null;
+  };
+
+  const ensureMediaStream = async (callType) => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: callType === "video",
+    });
+
+    setLocalStream(stream);
+    return stream;
+  };
+
+  const createPeerConnection = (toUserId, mediaStream) => {
+    const peerConnection = new RTCPeerConnection(RTC_CONFIG);
+
+    mediaStream.getTracks().forEach((track) => {
+      peerConnection.addTrack(track, mediaStream);
+    });
+
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        socketRef.current?.emit("call:ice-candidate", {
+          toUserId,
+          candidate: event.candidate,
+        });
+      }
+    };
+
+    peerConnection.ontrack = (event) => {
+      const [stream] = event.streams;
+      if (stream) {
+        setRemoteStream(stream);
+      }
+    };
+
+    peerConnection.onconnectionstatechange = () => {
+      if (["failed", "disconnected", "closed"].includes(peerConnection.connectionState)) {
+        cleanupPeer();
+        setCallState({
+          status: "idle",
+          type: null,
+          withUserId: null,
+          withName: null,
+        });
+      }
+    };
+
+    peerConnectionRef.current = peerConnection;
+    callPeerUserIdRef.current = toUserId;
+
+    return peerConnection;
+  };
+
+  useEffect(() => {
+    if (authLoading) {
       return;
     }
 
-    const fetchUsers = async () => {
-      const { data } = await api.get("/users");
-      setUsers(data.users);
+    if (!token) {
+      setUsers([]);
+      setGroups([]);
+      setSelectedUser(null);
+      setSelectedGroup(null);
+      setMessages([]);
+      setOnlineUsers([]);
+      setTypingFrom(null);
+      setGroupTypingBy([]);
+      setIncomingCall(null);
+      cleanupPeer();
+      return;
+    }
+
+    let isCancelled = false;
+
+    const fetchData = async () => {
+      try {
+        const [{ data: usersData }, { data: groupsData }] = await Promise.all([
+          api.get("/users"),
+          api.get("/groups"),
+        ]);
+
+        if (!isCancelled) {
+          setUsers(usersData.users || []);
+          setGroups(groupsData.groups || []);
+        }
+      } catch (error) {
+        if (error.response?.status === 401) {
+          logout();
+        }
+      }
     };
 
-    fetchUsers();
-  }, [token]);
+    fetchData();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [token, authLoading, logout]);
 
   useEffect(() => {
-    if (!token || !user?._id) {
+    if (authLoading || !token || !user?._id) {
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -73,6 +218,15 @@ export const ChatProvider = ({ children }) => {
       );
     });
 
+    socket.on("group:created", ({ group }) => {
+      setGroups((prev) => {
+        if (prev.some((existing) => existing._id === group._id)) {
+          return prev;
+        }
+        return [group, ...prev];
+      });
+    });
+
     socket.on("typing:start", ({ from }) => {
       setTypingFrom(from);
     });
@@ -81,29 +235,50 @@ export const ChatProvider = ({ children }) => {
       setTypingFrom((prev) => (prev === from ? null : prev));
     });
 
-    // Append only messages that belong to the currently opened one-to-one thread.
-    socket.on("message:new", (message) => {
-      const activeUser = selectedUserRef.current;
-
-      if (
-        !activeUser ||
-        ![
-          `${message.sender}-${message.recipient}`,
-          `${message.recipient}-${message.sender}`,
-        ].includes(`${user._id}-${activeUser._id}`)
-      ) {
+    socket.on("typing:group:start", ({ from, groupId }) => {
+      if (selectedGroupRef.current?._id !== groupId) {
         return;
       }
 
-      setMessages((prev) => {
-        if (prev.some((item) => item._id === message._id)) {
-          return prev;
-        }
-        return [...prev, message];
-      });
+      setGroupTypingBy((prev) => (prev.includes(from) ? prev : [...prev, from]));
     });
 
-    // Update local message state when the other user sees sent messages.
+    socket.on("typing:group:stop", ({ from, groupId }) => {
+      if (selectedGroupRef.current?._id !== groupId) {
+        return;
+      }
+
+      setGroupTypingBy((prev) => prev.filter((id) => id !== from));
+    });
+
+    socket.on("message:new", (message) => {
+      const activeUser = selectedUserRef.current;
+      if (!activeUser) {
+        return;
+      }
+
+      const belongsToActiveDirect = [
+        `${message.sender}-${message.recipient}`,
+        `${message.recipient}-${message.sender}`,
+      ].includes(`${user._id}-${activeUser._id}`);
+
+      if (!belongsToActiveDirect) {
+        return;
+      }
+
+      appendMessageIfMissing(message);
+    });
+
+    socket.on("message:group:new", (message) => {
+      const activeGroup = selectedGroupRef.current;
+
+      if (!activeGroup || activeGroup._id !== message.group) {
+        return;
+      }
+
+      appendMessageIfMissing(message);
+    });
+
     socket.on("receipt:seen", ({ byUserId }) => {
       setMessages((prev) =>
         prev.map((message) => {
@@ -118,62 +293,310 @@ export const ChatProvider = ({ children }) => {
       );
     });
 
+    socket.on("call:incoming", ({ fromUserId, fromName, callType, offer }) => {
+      setIncomingCall({ fromUserId, fromName, callType, offer });
+      setCallState({
+        status: "ringing",
+        type: callType,
+        withUserId: fromUserId,
+        withName: fromName,
+      });
+    });
+
+    socket.on("call:answered", async ({ fromUserId, answer }) => {
+      if (!peerConnectionRef.current || callPeerUserIdRef.current !== fromUserId) {
+        return;
+      }
+
+      await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+      setCallState((prev) => ({ ...prev, status: "in-call" }));
+    });
+
+    socket.on("call:ice-candidate", async ({ fromUserId, candidate }) => {
+      if (!peerConnectionRef.current || callPeerUserIdRef.current !== fromUserId) {
+        return;
+      }
+
+      await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+    });
+
+    socket.on("call:ended", ({ fromUserId }) => {
+      if (callPeerUserIdRef.current && callPeerUserIdRef.current !== fromUserId) {
+        return;
+      }
+
+      cleanupPeer();
+      setIncomingCall(null);
+      setCallState({
+        status: "idle",
+        type: null,
+        withUserId: null,
+        withName: null,
+      });
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [token, user?._id]);
+  }, [token, user?._id, authLoading]);
 
   const fetchConversation = async (otherUserId) => {
     if (!otherUserId) return;
+
     setLoadingMessages(true);
+    setTypingFrom(null);
+    setGroupTypingBy([]);
+
     try {
       const { data } = await api.get(`/messages/${otherUserId}`);
-      setMessages(data.messages);
-      // Opening a chat marks inbound messages as seen on both server and socket layers.
+      setMessages(data.messages || []);
       await api.patch(`/messages/${otherUserId}/seen`);
       socketRef.current?.emit("receipt:seen", { withUserId: otherUserId });
+    } catch (error) {
+      if (error.response?.status === 401) {
+        logout();
+      }
     } finally {
       setLoadingMessages(false);
     }
   };
 
-  const sendMessage = async (content) => {
-    if (!selectedUser?._id || !content.trim()) {
-      return;
-    }
+  const fetchGroupConversation = async (groupId) => {
+    if (!groupId) return;
 
-    socketRef.current?.emit("message:send", {
-      to: selectedUser._id,
-      content,
-    });
+    setLoadingMessages(true);
+    setTypingFrom(null);
+    setGroupTypingBy([]);
+
+    try {
+      const { data } = await api.get(`/messages/group/${groupId}`);
+      setMessages(data.messages || []);
+    } catch (error) {
+      if (error.response?.status === 401) {
+        logout();
+      }
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
+  const selectUser = (person) => {
+    setSelectedUser(person);
+    setSelectedGroup(null);
+    setGroupTypingBy([]);
+  };
+
+  const selectGroup = (group) => {
+    setSelectedGroup(group);
+    setSelectedUser(null);
+    setTypingFrom(null);
+  };
+
+  const sendMessage = async (content) => {
+    const clean = content.trim();
+    if (!clean) return;
+
+    try {
+      if (selectedGroup?._id) {
+        const { data } = await api.post("/messages/group", {
+          groupId: selectedGroup._id,
+          content: clean,
+        });
+        appendMessageIfMissing(data.message);
+        return;
+      }
+
+      if (!selectedUser?._id) return;
+
+      const { data } = await api.post("/messages", {
+        recipientId: selectedUser._id,
+        content: clean,
+      });
+      appendMessageIfMissing(data.message);
+    } catch (error) {
+      if (error.response?.status === 401) {
+        logout();
+      }
+      throw error;
+    }
   };
 
   const emitTypingStart = () => {
+    if (selectedGroup?._id) {
+      socketRef.current?.emit("typing:start-group", { groupId: selectedGroup._id });
+      return;
+    }
+
     if (!selectedUser?._id) return;
     socketRef.current?.emit("typing:start", { to: selectedUser._id });
   };
 
   const emitTypingStop = () => {
+    if (selectedGroup?._id) {
+      socketRef.current?.emit("typing:stop-group", { groupId: selectedGroup._id });
+      return;
+    }
+
     if (!selectedUser?._id) return;
     socketRef.current?.emit("typing:stop", { to: selectedUser._id });
   };
 
+  const createGroup = async ({ name, memberIds }) => {
+    const { data } = await api.post("/groups", { name, memberIds });
+    if (data.group) {
+      setGroups((prev) => {
+        if (prev.some((group) => group._id === data.group._id)) {
+          return prev;
+        }
+        return [data.group, ...prev];
+      });
+    }
+    return data.group;
+  };
+
+  const startCall = async (callType) => {
+    if (!selectedUser?._id || !socketRef.current) {
+      return;
+    }
+
+    try {
+      setIncomingCall(null);
+      cleanupPeer();
+
+      const mediaStream = await ensureMediaStream(callType);
+      const peer = createPeerConnection(selectedUser._id, mediaStream);
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+
+      socketRef.current.emit("call:start", {
+        toUserId: selectedUser._id,
+        callType,
+        offer,
+      });
+
+      setCallState({
+        status: "calling",
+        type: callType,
+        withUserId: selectedUser._id,
+        withName: selectedUser.name,
+      });
+    } catch (_error) {
+      cleanupPeer();
+      setCallState({ status: "idle", type: null, withUserId: null, withName: null });
+    }
+  };
+
+  const acceptIncomingCall = async () => {
+    if (!incomingCall || !socketRef.current) {
+      return;
+    }
+
+    try {
+      const mediaStream = await ensureMediaStream(incomingCall.callType);
+      cleanupPeer(false);
+
+      const peer = createPeerConnection(incomingCall.fromUserId, mediaStream);
+      await peer.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
+
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+
+      socketRef.current.emit("call:answer", {
+        toUserId: incomingCall.fromUserId,
+        answer,
+      });
+
+      setCallState({
+        status: "in-call",
+        type: incomingCall.callType,
+        withUserId: incomingCall.fromUserId,
+        withName: incomingCall.fromName,
+      });
+      setIncomingCall(null);
+    } catch (_error) {
+      cleanupPeer();
+      setIncomingCall(null);
+      setCallState({ status: "idle", type: null, withUserId: null, withName: null });
+    }
+  };
+
+  const declineIncomingCall = () => {
+    if (!incomingCall || !socketRef.current) {
+      return;
+    }
+
+    socketRef.current.emit("call:end", {
+      toUserId: incomingCall.fromUserId,
+      reason: "declined",
+    });
+
+    setIncomingCall(null);
+    setCallState({ status: "idle", type: null, withUserId: null, withName: null });
+  };
+
+  const endCall = () => {
+    if (callPeerUserIdRef.current && socketRef.current) {
+      socketRef.current.emit("call:end", {
+        toUserId: callPeerUserIdRef.current,
+        reason: "ended",
+      });
+    }
+
+    cleanupPeer();
+    setIncomingCall(null);
+    setCallState({ status: "idle", type: null, withUserId: null, withName: null });
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupPeer();
+    };
+  }, []);
+
   const value = useMemo(
     () => ({
       users,
+      groups,
       selectedUser,
-      setSelectedUser,
+      selectedGroup,
+      selectUser,
+      selectGroup,
       messages,
       loadingMessages,
       onlineUsers,
       typingFrom,
+      groupTypingBy,
       fetchConversation,
+      fetchGroupConversation,
       sendMessage,
       emitTypingStart,
       emitTypingStop,
+      createGroup,
+      startCall,
+      incomingCall,
+      callState,
+      localStream,
+      remoteStream,
+      acceptIncomingCall,
+      declineIncomingCall,
+      endCall,
     }),
-    [users, selectedUser, messages, loadingMessages, onlineUsers, typingFrom]
+    [
+      users,
+      groups,
+      selectedUser,
+      selectedGroup,
+      messages,
+      loadingMessages,
+      onlineUsers,
+      typingFrom,
+      groupTypingBy,
+      incomingCall,
+      callState,
+      localStream,
+      remoteStream,
+    ]
   );
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

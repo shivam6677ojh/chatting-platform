@@ -16,10 +16,25 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
+    authProvider: {
+      type: String,
+      enum: ["local", "google"],
+      default: "local",
+      required: true,
+    },
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      default: null,
+    },
     password: {
       type: String,
-      required: true,
+      required: function requiredPassword() {
+        return this.authProvider === "local";
+      },
       minlength: 6,
+      default: null,
     },
     isOnline: {
       type: Boolean,

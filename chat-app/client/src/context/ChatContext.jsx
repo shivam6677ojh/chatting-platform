@@ -53,6 +53,32 @@ export const ChatProvider = ({ children }) => {
     });
   };
 
+  const upsertGroupInState = (groupPayload) => {
+    if (!groupPayload?._id) {
+      return;
+    }
+
+    setGroups((prev) => {
+      const existing = prev.some((group) => group._id === groupPayload._id);
+      if (!existing) {
+        return [groupPayload, ...prev];
+      }
+
+      return prev.map((group) => (group._id === groupPayload._id ? groupPayload : group));
+    });
+  };
+
+  const removeGroupFromState = (groupId) => {
+    if (!groupId) {
+      return;
+    }
+
+    setGroups((prev) => prev.filter((group) => group._id !== groupId));
+    setSelectedGroup((prev) => (prev?._id === groupId ? null : prev));
+    setMessages((prev) => (selectedGroupRef.current?._id === groupId ? [] : prev));
+    setGroupTypingBy([]);
+  };
+
   useEffect(() => {
     selectedUserRef.current = selectedUser;
   }, [selectedUser]);
@@ -219,12 +245,23 @@ export const ChatProvider = ({ children }) => {
     });
 
     socket.on("group:created", ({ group }) => {
-      setGroups((prev) => {
-        if (prev.some((existing) => existing._id === group._id)) {
-          return prev;
-        }
-        return [group, ...prev];
-      });
+      upsertGroupInState(group);
+    });
+
+    socket.on("group:updated", ({ group }) => {
+      upsertGroupInState(group);
+
+      if (selectedGroupRef.current?._id === group?._id) {
+        setSelectedGroup(group);
+      }
+    });
+
+    socket.on("group:left", ({ groupId }) => {
+      removeGroupFromState(groupId);
+    });
+
+    socket.on("group:deleted", ({ groupId }) => {
+      removeGroupFromState(groupId);
     });
 
     socket.on("typing:start", ({ from }) => {
@@ -444,15 +481,52 @@ export const ChatProvider = ({ children }) => {
 
   const createGroup = async ({ name, memberIds }) => {
     const { data } = await api.post("/groups", { name, memberIds });
-    if (data.group) {
-      setGroups((prev) => {
-        if (prev.some((group) => group._id === data.group._id)) {
-          return prev;
-        }
-        return [data.group, ...prev];
-      });
-    }
+    upsertGroupInState(data.group);
     return data.group;
+  };
+
+  const searchGroupMembers = async (query) => {
+    const cleanQuery = query.trim();
+    if (cleanQuery.length < 2) {
+      return [];
+    }
+
+    const { data } = await api.get("/groups/search-members", {
+      params: { q: cleanQuery },
+    });
+
+    return data.users || [];
+  };
+
+  const getGroupDetails = async (groupId) => {
+    if (!groupId) {
+      return null;
+    }
+
+    const { data } = await api.get(`/groups/${groupId}`);
+    if (data.group) {
+      upsertGroupInState(data.group);
+    }
+
+    return data.group || null;
+  };
+
+  const leaveGroup = async (groupId) => {
+    if (!groupId) {
+      return;
+    }
+
+    await api.post(`/groups/${groupId}/leave`);
+    removeGroupFromState(groupId);
+  };
+
+  const deleteGroup = async (groupId) => {
+    if (!groupId) {
+      return;
+    }
+
+    await api.delete(`/groups/${groupId}`);
+    removeGroupFromState(groupId);
   };
 
   const startCall = async (callType) => {
@@ -573,6 +647,10 @@ export const ChatProvider = ({ children }) => {
       emitTypingStart,
       emitTypingStop,
       createGroup,
+      searchGroupMembers,
+      getGroupDetails,
+      leaveGroup,
+      deleteGroup,
       startCall,
       incomingCall,
       callState,

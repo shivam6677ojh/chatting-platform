@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useParams } from "react-router-dom";
 
 import CallOverlay from "../components/CallOverlay";
 import ChatHeader from "../components/ChatHeader";
@@ -8,7 +9,60 @@ import UserList from "../components/UserList";
 import { useChat } from "../context/ChatContext";
 
 export default function ChatPage() {
-  const { selectedUser, selectedGroup, fetchConversation, fetchGroupConversation } = useChat();
+  const { userId, groupId } = useParams();
+  const {
+    users,
+    groups,
+    selectedUser,
+    selectedGroup,
+    selectUser,
+    selectGroup,
+    fetchConversation,
+    fetchGroupConversation,
+    getGroupDetails,
+  } = useChat();
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const syncSelectionFromRoute = async () => {
+      if (userId) {
+        const matchedUser = users.find((item) => item._id === userId);
+        if (matchedUser && selectedUser?._id !== userId) {
+          selectUser(matchedUser);
+        }
+        return;
+      }
+
+      if (groupId) {
+        let matchedGroup = groups.find((item) => item._id === groupId);
+        if (!matchedGroup) {
+          try {
+            matchedGroup = await getGroupDetails(groupId);
+          } catch (_error) {
+            matchedGroup = null;
+          }
+        }
+
+        if (!isCancelled && matchedGroup && selectedGroup?._id !== groupId) {
+          selectGroup(matchedGroup);
+        }
+      }
+    };
+
+    syncSelectionFromRoute();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    userId,
+    groupId,
+    users,
+    groups,
+    selectedUser?._id,
+    selectedGroup?._id,
+  ]);
 
   useEffect(() => {
     if (selectedUser?._id) {

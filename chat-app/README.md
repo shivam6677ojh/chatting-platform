@@ -104,9 +104,30 @@ npm run dev
 - POST /api/auth/google
 - GET /api/auth/me
 - GET /api/users
+- GET /api/groups/search-members?q=<name_or_email>
+- GET /api/groups/:groupId
+- GET /api/groups
+- POST /api/groups
+- POST /api/groups/:groupId/leave
+- DELETE /api/groups/:groupId
 - GET /api/messages/:userId
+- GET /api/messages/group/:groupId
 - POST /api/messages
+- POST /api/messages/group
 - PATCH /api/messages/:userId/seen
+
+## Chat Architecture (Login-First)
+
+- All chat APIs are protected with JWT middleware; user must login first.
+- Frontend chat routes:
+  - `/chat` (base layout)
+  - `/chat/user/:userId` (direct chat)
+  - `/chat/group/:groupId` (group chat)
+- Group creation uses a modal form (not browser prompts) with:
+  - Search users by name/email via `GET /api/groups/search-members`
+  - Member detail preview (name, email, online/last seen)
+  - Group create submit via `POST /api/groups`
+- Group chat loads by route and fetches full details via `GET /api/groups/:groupId` when needed.
 
 ## Notes
 - Socket authentication uses JWT passed in socket handshake auth.

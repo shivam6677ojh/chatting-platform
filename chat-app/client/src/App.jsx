@@ -25,7 +25,23 @@ export default function App() {
   return (
     <Routes>
       <Route
-        path="/"
+        path="/chat"
+        element={
+          <ProtectedRoute>
+            <ChatPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/chat/user/:userId"
+        element={
+          <ProtectedRoute>
+            <ChatPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/chat/group/:groupId"
         element={
           <ProtectedRoute>
             <ChatPage />
@@ -34,13 +50,17 @@ export default function App() {
       />
       <Route
         path="/login"
-        element={token ? <Navigate to="/" replace /> : <LoginPage />}
+        element={token ? <Navigate to="/chat" replace /> : <LoginPage />}
       />
       <Route
         path="/register"
-        element={token ? <Navigate to="/" replace /> : <RegisterPage />}
+        element={token ? <Navigate to="/chat" replace /> : <RegisterPage />}
       />
-      <Route path="*" element={<Navigate to={token ? "/" : "/login"} replace />} />
+      <Route
+        path="/"
+        element={<Navigate to={token ? "/chat" : "/login"} replace />}
+      />
+      <Route path="*" element={<Navigate to={token ? "/chat" : "/login"} replace />} />
     </Routes>
   );
 }
